@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +40,7 @@ class ChatResult:
     text: str
     cost: float
     model: str
+    elapsed: float = 0.0  # request round-trip time in seconds
 
 
 # --- encoding + prompt builders (pure) ------------------------------------
@@ -177,18 +179,34 @@ def is_free_model(model: dict) -> bool:
     return str((model.get("pricing") or {}).get("prompt", "")) in ("0", "0.0")
 
 
+def _input_modalities(model: dict) -> list[str]:
+    return (model.get("architecture") or {}).get("input_modalities") or []
+
+
+def _output_modalities(model: dict) -> list[str]:
+    return (model.get("architecture") or {}).get("output_modalities") or []
+
+
+def supports_text(model: dict) -> bool:
+    """Replies with text and isn't an image/audio generator."""
+    out = _output_modalities(model)
+    return "text" in out and "image" not in out and "audio" not in out
+
+
 def supports_vision(model: dict) -> bool:
-    modalities = (model.get("architecture") or {}).get("input_modalities") or []
-    return "image" in modalities
+    """A text model that also accepts image input (true image recognition)."""
+    return supports_text(model) and "image" in _input_modalities(model)
 
 
 def filter_models(
-    models: list[dict], which: str = "all", vision_only: bool = False
+    models: list[dict], which: str = "all", capability: str | None = None
 ) -> list[dict]:
-    """Filter by free/paid/all and, optionally, vision capability."""
+    """Filter by free/paid/all and by capability ("vision", "text", or None)."""
     out = []
     for model in models:
-        if vision_only and not supports_vision(model):
+        if capability == "vision" and not supports_vision(model):
+            continue
+        if capability == "text" and not supports_text(model):
             continue
         if which == "free" and not is_free_model(model):
             continue
@@ -228,6 +246,7 @@ class Client:
 
     def chat(self, model: str, messages: list[dict]) -> ChatResult:
         body = {"model": model, "messages": messages}
+        start = time.monotonic()
         try:
             resp = self._http.post(
                 f"{self._base}/chat/completions",
@@ -236,6 +255,7 @@ class Client:
             )
         except httpx.RequestError as exc:
             raise OpenRouterError(f"could not reach OpenRouter: {exc}") from exc
+        elapsed = time.monotonic() - start
         if resp.status_code != 200:
             raise OpenRouterError(self._error_message(resp))
 
@@ -245,7 +265,7 @@ class Client:
         except (KeyError, IndexError, TypeError) as exc:
             raise OpenRouterError("unexpected response shape") from exc
         cost = float((data.get("usage") or {}).get("cost") or 0.0)
-        return ChatResult(text=text, cost=cost, model=model)
+        return ChatResult(text=text, cost=cost, model=model, elapsed=elapsed)
 
     @staticmethod
     def _error_message(resp: httpx.Response) -> str:

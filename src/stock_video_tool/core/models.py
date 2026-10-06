@@ -76,10 +76,24 @@ class VideoItem:
     output_path: Path | None = None
 
     stage: Stage = Stage.NEW
+    # Names of AI steps currently in flight for this clip ("description",
+    # "titles", "tags"), so each clip tracks its own progress independently.
+    running: set[str] = field(default_factory=set)
+    # Which model produced each field (query type -> model id), so a rating can
+    # be attributed to the model that generated it.
+    models_used: dict[str, str] = field(default_factory=dict)
 
     @property
     def filename(self) -> str:
         return self.path.name
+
+    @property
+    def size_mb(self) -> float | None:
+        """File size in megabytes, or None if the file can't be read."""
+        try:
+            return self.path.stat().st_size / (1024 * 1024)
+        except OSError:
+            return None
 
     @property
     def is_h265(self) -> bool:

@@ -17,7 +17,7 @@ generated on the fly (see `tests/conftest.py`); they auto-skip if those binaries
 aren't on `PATH`. All other tests are pure and need no external tools or network
 (OpenRouter calls are exercised through an in-memory mock transport).
 
-**Total: 84 tests.**
+**Total: 99 tests (plus 2 skipped placeholders).**
 
 ---
 
@@ -118,7 +118,7 @@ Covers saving/reloading generated text fields keyed by filename.
 
 ---
 
-## tests/test_openrouter.py — AI client: prompts, parsing, HTTP (36)
+## tests/test_openrouter.py — AI client: prompts, parsing, HTTP (39)
 
 ### Prompt builders (pure)
 
@@ -199,16 +199,22 @@ Covers saving/reloading generated text fields keyed by filename.
 
 - **test_is_free_model_by_zero_prompt_price** — a model is "free" only when its
   prompt price is zero.
-- **test_supports_vision_by_input_modalities** — a model supports vision only when
-  its input modalities include images.
+- **test_supports_text_excludes_generators** — a text model outputs text and isn't
+  an image or audio generator.
+- **test_supports_vision_needs_image_in_and_text_out** — vision means it accepts
+  image input and replies with text.
+- **test_supports_vision_excludes_image_generators** — a model that takes an image
+  but outputs an image is a generator, not recognition.
 - **test_filter_models_free_only** — the free filter keeps only zero-price models.
 - **test_filter_models_paid_only** — the paid filter keeps only priced models.
-- **test_filter_models_vision_only_keeps_both_prices** — the vision filter keeps
-  vision-capable models regardless of price.
+- **test_filter_models_vision_keeps_both_prices_excludes_generators** — the vision
+  filter keeps vision models at any price but drops generators.
+- **test_filter_models_text_excludes_image_generators** — the text filter keeps
+  text models and drops image/audio generators.
 
 ---
 
-## tests/test_csv_export.py — Envato CSV writer (9)
+## tests/test_csv_export.py — Envato CSV writer (11)
 
 - **test_columns_match_the_envato_header_in_order** — the first seven columns and
   the last column are exactly right, and there are 25 columns total.
@@ -217,6 +223,10 @@ Covers saving/reloading generated text fields keyed by filename.
 - **test_build_row_description_falls_back_to_title_when_empty** — when a clip has
   no description, the Description column uses the title instead of being blank.
 - **test_build_row_uses_fixed_prices** — single-use price is 11 and multi-use is 22.
+- **test_missing_fields_empty_for_complete_item** — a fully-filled clip reports no
+  missing fields.
+- **test_missing_fields_lists_each_empty_field** — an empty clip reports Title,
+  Description, Keywords, and Category as missing (drives the export warning).
 - **test_build_row_filename_is_original_when_not_processed** — Filename is the
   original name when the clip wasn't converted/stripped.
 - **test_build_row_filename_is_processed_output_when_present** — Filename is the
@@ -227,6 +237,35 @@ Covers saving/reloading generated text fields keyed by filename.
   correctly, keeping comma-containing keywords in a single cell.
 - **test_write_csv_writes_header_only_for_empty_list** — exporting no items writes
   just the header row.
+
+---
+
+## tests/test_stats.py — usage stats (cost, time & ratings) (6)
+
+- **test_summary_none_when_no_data** — asking for a model/query with no history
+  returns nothing.
+- **test_record_then_summary_averages** — two recorded calls average their cost and
+  response time correctly.
+- **test_query_types_are_tracked_separately** — description/titles/tags/category
+  costs are kept per query type, not pooled.
+- **test_all_summaries_lists_every_model_and_type** — the full summary lists one row
+  per model+query type, sorted.
+- **test_record_rating_counts_good_and_bad** — thumbs-up/down ratings accumulate as
+  good/bad counts for a model+query type.
+- **test_stats_persist_across_instances** — recorded stats survive an app restart.
+
+---
+
+## tests/test_local_vision.py — local provider stub (2, +2 skipped)
+
+- **test_describe_stub_raises_not_implemented** — the local describe stub raises
+  until a backend is wired in.
+- **test_tags_stub_raises_not_implemented** — the local tagger stub raises until a
+  backend is wired in.
+- *(skipped)* **test_local_description_quality_vs_cloud** — placeholder for the
+  future local-vs-cloud description benchmark.
+- *(skipped)* **test_local_tag_quality_vs_cloud** — placeholder for the future
+  local-vs-cloud tag benchmark.
 
 ---
 
@@ -242,3 +281,11 @@ Covers saving/reloading generated text fields keyed by filename.
   real HEVC clip produces a muted H264 output.
 - **test_process_item_strips_audio_from_h264** **[ffmpeg]** — processing a real
   H264+audio clip produces an output with no audio.
+
+
+## tests/test_models.py — VideoItem derived properties (2)
+
+- **test_size_mb_reports_file_size_in_megabytes** — `size_mb` divides the on-disk
+  byte size by 1024² to report megabytes.
+- **test_size_mb_is_none_when_file_missing** — `size_mb` returns None when the file
+  can't be read (e.g. an unmounted external drive).

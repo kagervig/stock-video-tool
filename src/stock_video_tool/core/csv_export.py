@@ -41,6 +41,20 @@ COLUMNS = [
 ]
 
 
+def missing_fields(item: VideoItem) -> list[str]:
+    """The pipeline fields a clip is still missing, for an export warning."""
+    missing = []
+    if not item.title:
+        missing.append("Title")
+    if not item.description:
+        missing.append("Description")
+    if not item.tags:
+        missing.append("Keywords")
+    if not item.category:
+        missing.append("Category")
+    return missing
+
+
 def build_row(item: VideoItem) -> dict:
     row = {column: "" for column in COLUMNS}
     row["Filename"] = item.export_filename

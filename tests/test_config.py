@@ -8,7 +8,11 @@ _FULL_MODEL = {
     "id": "x/y",
     "name": "fancy",
     "pricing": {"prompt": "0", "completion": "0"},
-    "architecture": {"input_modalities": ["text", "image"], "extra": "drop me"},
+    "architecture": {
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"],
+        "extra": "drop me",
+    },
     "description": "long text we do not need",
 }
 
@@ -18,7 +22,10 @@ def test_slim_models_keeps_only_needed_fields():
     assert slim == [{
         "id": "x/y",
         "pricing": {"prompt": "0"},
-        "architecture": {"input_modalities": ["text", "image"]},
+        "architecture": {
+            "input_modalities": ["text", "image"],
+            "output_modalities": ["text"],
+        },
     }]
 
 

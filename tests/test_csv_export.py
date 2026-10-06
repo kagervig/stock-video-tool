@@ -64,6 +64,18 @@ def test_build_row_leaves_other_columns_blank():
         assert row[column] == ""
 
 
+def test_missing_fields_empty_for_complete_item():
+    item = _item()
+    assert csv_export.missing_fields(item) == []
+
+
+def test_missing_fields_lists_each_empty_field():
+    item = VideoItem(path=Path("/videos/clip.mp4"))  # nothing filled in
+    assert csv_export.missing_fields(item) == [
+        "Title", "Description", "Keywords", "Category",
+    ]
+
+
 def test_write_csv_round_trips_with_quoted_keywords(tmp_path):
     out = tmp_path / "export.csv"
     csv_export.write_csv([_item()], out)

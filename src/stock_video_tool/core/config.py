@@ -83,12 +83,13 @@ def slim_models(models: list[dict]) -> list[dict]:
     for model in models:
         if not model.get("id"):
             continue
+        architecture = model.get("architecture") or {}
         slim.append({
             "id": model["id"],
             "pricing": {"prompt": (model.get("pricing") or {}).get("prompt")},
             "architecture": {
-                "input_modalities":
-                    (model.get("architecture") or {}).get("input_modalities") or []
+                "input_modalities": architecture.get("input_modalities") or [],
+                "output_modalities": architecture.get("output_modalities") or [],
             },
         })
     return slim

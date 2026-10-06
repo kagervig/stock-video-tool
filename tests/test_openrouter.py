@@ -222,20 +222,40 @@ def test_is_free_model_by_zero_prompt_price():
     assert orc.is_free_model({"pricing": {"prompt": "0.0000012"}}) is False
 
 
-def test_supports_vision_by_input_modalities():
-    assert orc.supports_vision(
-        {"architecture": {"input_modalities": ["text", "image"]}}) is True
-    assert orc.supports_vision(
-        {"architecture": {"input_modalities": ["text"]}}) is False
+def test_supports_vision_needs_image_in_and_text_out():
+    assert orc.supports_vision({"architecture": {
+        "input_modalities": ["text", "image"], "output_modalities": ["text"]}}) is True
+    assert orc.supports_vision({"architecture": {
+        "input_modalities": ["text"], "output_modalities": ["text"]}}) is False
+
+
+def test_supports_vision_excludes_image_generators():
+    # takes an image but outputs an image -> a generator, not recognition
+    assert orc.supports_vision({"architecture": {
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["image", "text"]}}) is False
+
+
+def test_supports_text_excludes_generators():
+    assert orc.supports_text({"architecture": {"output_modalities": ["text"]}}) is True
+    assert orc.supports_text({"architecture": {
+        "output_modalities": ["image", "text"]}}) is False
+    assert orc.supports_text({"architecture": {
+        "output_modalities": ["audio", "text"]}}) is False
 
 
 _MODELS = [
     {"id": "free-text", "pricing": {"prompt": "0"},
-     "architecture": {"input_modalities": ["text"]}},
+     "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}},
     {"id": "free-vision", "pricing": {"prompt": "0"},
-     "architecture": {"input_modalities": ["text", "image"]}},
+     "architecture": {"input_modalities": ["text", "image"],
+                      "output_modalities": ["text"]}},
     {"id": "paid-vision", "pricing": {"prompt": "0.001"},
-     "architecture": {"input_modalities": ["text", "image"]}},
+     "architecture": {"input_modalities": ["text", "image"],
+                      "output_modalities": ["text"]}},
+    {"id": "image-gen", "pricing": {"prompt": "0.002"},
+     "architecture": {"input_modalities": ["text", "image"],
+                      "output_modalities": ["image", "text"]}},
 ]
 
 
@@ -246,12 +266,17 @@ def test_filter_models_free_only():
 
 def test_filter_models_paid_only():
     ids = [m["id"] for m in orc.filter_models(_MODELS, which="paid")]
-    assert ids == ["paid-vision"]
+    assert ids == ["paid-vision", "image-gen"]
 
 
-def test_filter_models_vision_only_keeps_both_prices():
-    ids = [m["id"] for m in orc.filter_models(_MODELS, vision_only=True)]
+def test_filter_models_vision_keeps_both_prices_excludes_generators():
+    ids = [m["id"] for m in orc.filter_models(_MODELS, capability="vision")]
     assert ids == ["free-vision", "paid-vision"]
+
+
+def test_filter_models_text_excludes_image_generators():
+    ids = [m["id"] for m in orc.filter_models(_MODELS, capability="text")]
+    assert ids == ["free-text", "free-vision", "paid-vision"]
 
 
 def test_categorize_call_matches_allowed_category():

@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThreadPool, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -39,11 +39,16 @@ from ..core import library as lib
 from ..core import openrouter as orc
 from ..core.config import Settings
 from ..core.library import Library
+from ..core.stats import Stats
 from ..core.models import CATEGORIES, ConvertStatus, QueueOp, Stage, VideoItem
 from ..workers import CallWorker, ProbeWorker, QueueWorker
 from .settings_dialog import SettingsDialog
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".m4v", ".avi"}
+
+DESCRIBE_LABEL = "Get video subject description (AI vision)"
+TITLES_LABEL = "Approve description → generate titles"
+TAGS_LABEL = "Approve title → generate 45 tags + category"
 
 
 class MainWindow(QMainWindow):
@@ -54,6 +59,7 @@ class MainWindow(QMainWindow):
 
         self.settings = Settings.load()
         self.library = Library()
+        self.stats = Stats()
         self.items: list[VideoItem] = []
         self._shown_item: VideoItem | None = None  # item backing the editors
         self._loading = False  # True while editors are populated programmatically
@@ -63,6 +69,7 @@ class MainWindow(QMainWindow):
         self._workers: set = set()  # keep workers alive until they finish
         self._queue_running = False
         self._queue_worker: QueueWorker | None = None
+        self._rate_buttons: dict[str, tuple[QPushButton, QPushButton]] = {}
 
         self._build_toolbar()
 
@@ -121,7 +128,7 @@ class MainWindow(QMainWindow):
         tb.addWidget(self.cost_label)
 
     def _refresh_cost(self) -> None:
-        self.cost_label.setText(f"  Session cost: ${self.session_cost:.4f}  ")
+        self.cost_label.setText(f"  Session token cost: ${self.session_cost:.4f}  ")
 
     def _charge(self, section: str, cost: float) -> None:
         """Record the cost of one request and report which key was used."""
@@ -189,10 +196,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(thumbs_frame)
 
         # description
-        self.describe_btn = QPushButton("Get video subject description (AI vision)")
+        self.describe_btn = QPushButton(DESCRIBE_LABEL)
         self.describe_btn.clicked.connect(self._describe)
         layout.addWidget(self.describe_btn)
-        layout.addWidget(QLabel("Description"))
+        desc_header = QHBoxLayout()
+        desc_header.addWidget(QLabel("Description"))
+        desc_header.addStretch(1)
+        for btn in self._rating_buttons("description"):
+            desc_header.addWidget(btn)
+        layout.addLayout(desc_header)
         self.desc_edit = QPlainTextEdit()
         self.desc_edit.setPlaceholderText("Generated description appears here — editable")
         self.desc_edit.setFixedHeight(90)
@@ -200,7 +212,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.desc_edit)
 
         # titles
-        self.titles_btn = QPushButton("Approve description → generate titles")
+        self.titles_btn = QPushButton(TITLES_LABEL)
         self.titles_btn.clicked.connect(self._gen_titles)
         layout.addWidget(self.titles_btn)
         title_row = QHBoxLayout()
@@ -212,10 +224,12 @@ class MainWindow(QMainWindow):
         title_row.addWidget(QLabel("Title"))
         title_row.addWidget(self.title_combo, 1)
         title_row.addWidget(self.more_titles_btn)
+        for btn in self._rating_buttons("titles"):
+            title_row.addWidget(btn)
         layout.addLayout(title_row)
 
         # tags
-        self.tags_btn = QPushButton("Approve title → generate 45 tags + category")
+        self.tags_btn = QPushButton(TAGS_LABEL)
         self.tags_btn.clicked.connect(self._gen_tags)
         layout.addWidget(self.tags_btn)
         tags_label_row = QHBoxLayout()
@@ -223,6 +237,8 @@ class MainWindow(QMainWindow):
         tags_label_row.addStretch(1)
         self.tags_count_label = QLabel()
         tags_label_row.addWidget(self.tags_count_label)
+        for btn in self._rating_buttons("tags"):
+            tags_label_row.addWidget(btn)
         layout.addLayout(tags_label_row)
         self.tags_edit = TagsEdit()
         self.tags_edit.setPlaceholderText("Generated tags appear here — editable")
@@ -261,13 +277,26 @@ class MainWindow(QMainWindow):
             if stored:
                 lib.apply_fields(item, stored)
             self.items.append(item)
-            QListWidgetItem(self._row_label(item), self.list)
             self._probe(item)  # always regenerate thumbnails + re-probe stats
             added += 1
         if added:
+            self._rebuild_list()
             self.statusBar().showMessage(f"Added {added} video(s) — analyzing…")
-            if self.list.currentRow() < 0:
-                self.list.setCurrentRow(0)
+
+    def _rebuild_list(self) -> None:
+        """Sort items alphabetically by filename and rebuild the list rows,
+        keeping self.items and the list widget index-aligned."""
+        keep = self._shown_item
+        self.items.sort(key=lambda item: item.filename.lower())
+        self.list.blockSignals(True)
+        self.list.clear()
+        for item in self.items:
+            QListWidgetItem(self._row_label(item), self.list)
+        self.list.blockSignals(False)
+        if keep in self.items:
+            self.list.setCurrentRow(self.items.index(keep))
+        elif self.items:
+            self.list.setCurrentRow(0)
 
     def _probe(self, item: VideoItem) -> None:
         """Kick off ffprobe + thumbnail generation on a background thread."""
@@ -314,6 +343,8 @@ class MainWindow(QMainWindow):
             marks.append("T")
         if item.tags:
             marks.append("K")
+        if item.running:
+            marks.append("⋯ " + "/".join(sorted(item.running)))
         if item.is_h265:
             marks.append("H265")
         elif item.has_audio:
@@ -377,11 +408,11 @@ class MainWindow(QMainWindow):
         self._loading = True
         has = item is not None
         for w in (
-            self.describe_btn, self.desc_edit, self.titles_btn, self.title_combo,
-            self.more_titles_btn, self.tags_btn, self.tags_edit,
+            self.desc_edit, self.title_combo, self.tags_edit,
             self.category_combo, self.convert_btn,
         ):
             w.setEnabled(has)
+        self._update_ai_buttons(item)
 
         # clear thumbnails row
         while self.thumbs_row.count():
@@ -407,8 +438,9 @@ class MainWindow(QMainWindow):
             res = f"{item.width}×{item.height}" if item.width else "?"
             audio = "audio" if item.has_audio else "silent"
             dur = f"{item.duration:.1f}s" if item.duration else "?"
+            size = f"{item.size_mb:.1f} MB" if item.size_mb is not None else "?"
             self.stats_label.setText(
-                f"codec: {item.codec}   {res}   {dur}   {audio}"
+                f"codec: {item.codec}   {res}   {dur}   {audio}   {size}"
             )
 
         self._render_thumbnails(item)
@@ -435,6 +467,54 @@ class MainWindow(QMainWindow):
 
         self._update_tag_count()
         self._loading = False
+
+    def _rating_buttons(self, query_type: str) -> tuple[QPushButton, QPushButton]:
+        up = QPushButton("👍")
+        down = QPushButton("👎")
+        for btn in (up, down):
+            btn.setFixedWidth(38)
+        up.setToolTip(f"This model's {query_type} output was good")
+        down.setToolTip(f"This model's {query_type} output was poor")
+        up.clicked.connect(lambda: self._rate(query_type, True))
+        down.clicked.connect(lambda: self._rate(query_type, False))
+        self._rate_buttons[query_type] = (up, down)
+        return up, down
+
+    def _rate(self, query_type: str, good: bool) -> None:
+        item = self._current()
+        if not item:
+            return
+        model = item.models_used.get(query_type)
+        if not model:
+            self.statusBar().showMessage(
+                f"Generate {query_type} first, then rate it"
+            )
+            return
+        self.stats.record_rating(model, query_type, good)
+        verdict = "👍 good" if good else "👎 poor"
+        self.statusBar().showMessage(f"Rated {query_type} from {model}: {verdict}")
+
+    def _update_rating_buttons(self, item: VideoItem | None) -> None:
+        for query_type, (up, down) in self._rate_buttons.items():
+            enabled = bool(item and item.models_used.get(query_type))
+            up.setEnabled(enabled)
+            down.setEnabled(enabled)
+
+    def _update_ai_buttons(self, item: VideoItem | None) -> None:
+        """Drive the AI buttons from the shown item's own running state, so each
+        clip's progress is independent and switching clips never desyncs them."""
+        running = item.running if item else set()
+        has = item is not None
+        for section, button, label in (
+            ("description", self.describe_btn, DESCRIBE_LABEL),
+            ("titles", self.titles_btn, TITLES_LABEL),
+            ("tags", self.tags_btn, TAGS_LABEL),
+        ):
+            active = section in running
+            button.setEnabled(has and not active)
+            button.setText("Working…" if active else label)
+        self.more_titles_btn.setEnabled(has and "titles" not in running)
+        self._update_rating_buttons(item)
 
     def _render_thumbnails(self, item: VideoItem) -> None:
         labels = ("10%", "40%", "70%", "90%")
@@ -517,32 +597,39 @@ class MainWindow(QMainWindow):
             return None, None
         return orc.Client(key), model
 
-    def _run_ai(self, section, item, button, fn, apply_cb) -> None:
-        original = button.text()
-        button.setEnabled(False)
-        button.setText("Working…")
+    def _run_ai(self, section, item, fn, apply_cb) -> None:
+        item.running.add(section)
         self._begin_busy()
-        self.statusBar().showMessage(f"{section}: contacting OpenRouter…")
+        self._refresh_row(self.items.index(item))
+        if self._current() is item:
+            self._update_ai_buttons(item)
+        self.statusBar().showMessage(
+            f"{section} for {item.filename}: contacting OpenRouter…"
+        )
         worker = CallWorker(item, fn)
         worker.signals.finished.connect(
-            lambda it, res: self._ai_done(button, original, apply_cb, it, res)
+            lambda it, res: self._ai_done(section, apply_cb, it, res)
         )
         worker.signals.failed.connect(
-            lambda it, msg: self._ai_fail(button, original, it, msg)
+            lambda it, msg: self._ai_fail(section, it, msg)
         )
         self._track(worker)
         self.pool.start(worker)
 
-    def _ai_done(self, button, original, apply_cb, item, result) -> None:
-        button.setEnabled(True)
-        button.setText(original)
+    def _ai_done(self, section, apply_cb, item, result) -> None:
+        item.running.discard(section)
         self._end_busy()
-        apply_cb(item, result)
+        apply_cb(item, result)  # updates the item (and editors, if it's shown)
+        self._refresh_row(self.items.index(item))
+        if self._current() is item:
+            self._update_ai_buttons(item)
 
-    def _ai_fail(self, button, original, item, message) -> None:
-        button.setEnabled(True)
-        button.setText(original)
+    def _ai_fail(self, section, item, message) -> None:
+        item.running.discard(section)
         self._end_busy()
+        self._refresh_row(self.items.index(item))
+        if self._current() is item:
+            self._update_ai_buttons(item)
         self.statusBar().showMessage(f"{item.filename}: {message}")
 
     def _persist(self, item: VideoItem) -> None:
@@ -561,7 +648,7 @@ class MainWindow(QMainWindow):
         thumbs = list(item.thumbnails)
         prompt = self.settings.description.prompt or None
         self._run_ai(
-            "description", item, self.describe_btn,
+            "description", item,
             lambda: client.describe(thumbs, model, prompt=prompt),
             self._apply_describe,
         )
@@ -573,6 +660,8 @@ class MainWindow(QMainWindow):
             self.desc_edit.setPlainText(item.description)
         self._refresh_row(self.items.index(item))
         self._persist(item)
+        item.models_used["description"] = result.model
+        self.stats.record(result.model, "description", result.cost, result.elapsed)
         self._charge("description", result.cost)
 
     def _gen_titles(self) -> None:
@@ -589,7 +678,7 @@ class MainWindow(QMainWindow):
             return
         prompt = self.settings.titles.prompt or None
         self._run_ai(
-            "titles", item, self.titles_btn,
+            "titles", item,
             lambda: client.titles(description, model, prompt=prompt),
             self._apply_titles,
         )
@@ -602,6 +691,8 @@ class MainWindow(QMainWindow):
             self.title_combo.clear()
             self.title_combo.addItems(titles)
         self._persist(item)
+        item.models_used["titles"] = chat.model
+        self.stats.record(chat.model, "titles", chat.cost, chat.elapsed)
         self._charge("titles", chat.cost)
 
     def _gen_tags(self) -> None:
@@ -625,15 +716,14 @@ class MainWindow(QMainWindow):
             # discard the tags we already paid for, so fall back to blank.
             try:
                 category, r2 = client.categorize(description, CATEGORIES, model)
-                category_cost = r2.cost
             except orc.OpenRouterError:
-                category, category_cost = "", 0.0
-            return tags, category, r1.cost + category_cost
+                category, r2 = "", None
+            return tags, category, r1, r2
 
-        self._run_ai("tags", item, self.tags_btn, work, self._apply_tags)
+        self._run_ai("tags", item, work, self._apply_tags)
 
     def _apply_tags(self, item, result) -> None:
-        tags, category, cost = result
+        tags, category, r1, r2 = result
         item.tags = ", ".join(tags)
         item.category = category
         item.stage = Stage.TAGGED
@@ -642,7 +732,14 @@ class MainWindow(QMainWindow):
             self.category_combo.setCurrentText(category)
         self._refresh_row(self.items.index(item))
         self._persist(item)
-        self._charge("tags", cost)
+        item.models_used["tags"] = r1.model
+        self.stats.record(r1.model, "tags", r1.cost, r1.elapsed)
+        total_cost = r1.cost
+        if r2 is not None:
+            item.models_used["category"] = r2.model
+            self.stats.record(r2.model, "category", r2.cost, r2.elapsed)
+            total_cost += r2.cost
+        self._charge("tags", total_cost)
 
     # ---- copy / paste meta ----------------------------------------------
 
@@ -813,6 +910,22 @@ class MainWindow(QMainWindow):
             )
             return
 
+        incomplete = []
+        for item in self.items:
+            missing = csv_export.missing_fields(item)
+            if missing:
+                incomplete.append(f"  • {item.filename}: missing {', '.join(missing)}")
+        if incomplete:
+            reply = QMessageBox.question(
+                self, "Missing data",
+                "Some clips are missing data:\n\n" + "\n".join(incomplete)
+                + "\n\nExport anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
         out = (
             Path(self.settings.export_path)
             / f"stock_video_export_{datetime.now():%Y%m%d_%H%M%S}.csv"
@@ -859,3 +972,15 @@ class DropList(QListWidget):
         paths = [u.toLocalFile() for u in event.mimeData().urls()]
         self._on_drop(paths)
         event.acceptProposedAction()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self.count() == 0:
+            painter = QPainter(self.viewport())
+            painter.setPen(QColor("#888"))
+            painter.drawText(
+                self.viewport().rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                "Drag and drop files here",
+            )
+            painter.end()
