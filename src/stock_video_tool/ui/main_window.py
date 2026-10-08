@@ -272,6 +272,9 @@ class MainWindow(QMainWindow):
         added = 0
         for p in paths:
             path = Path(p)
+            if not presentation.is_video(path):
+                continue
+            ##TO DO add popup error saying unsupported filetype
             item = VideoItem(path=path)
             stored = self.library.lookup(item.filename)
             if stored:
@@ -405,16 +408,7 @@ class MainWindow(QMainWindow):
             return
 
         self.title_header.setText(item.filename)
-        if item.codec is None:
-            self.stats_label.setText("analyzing…")
-        else:
-            res = f"{item.width}×{item.height}" if item.width else "?"
-            audio = "audio" if item.has_audio else "silent"
-            dur = f"{item.duration:.1f}s" if item.duration else "?"
-            size = f"{item.size_mb:.1f} MB" if item.size_mb is not None else "?"
-            self.stats_label.setText(
-                f"codec: {item.codec}   {res}   {dur}   {audio}   {size}"
-            )
+        self.stats_label.setText(presentation.stats_summary(item))
 
         self._render_thumbnails(item)
 
@@ -515,19 +509,9 @@ class MainWindow(QMainWindow):
         self.thumbs_row.addStretch(1)
 
     def _update_tag_count(self) -> None:
-        count = len(orc.parse_tags(self.tags_edit.toPlainText()))
-        over = orc.tags_over_limit(count)
-        if over:
-            text = f"{count} / {orc.TAG_COUNT} — remove {over} (max {orc.TAG_LIMIT})"
-            color = "#c62828"  # red: over the hard limit
-        elif count > orc.TAG_COUNT:
-            text = f"{count} / {orc.TAG_COUNT}"
-            color = "#f9a825"  # amber: past the soft target but within the limit
-        else:
-            text = f"{count} / {orc.TAG_COUNT}"
-            color = "#2e7d32" if count == orc.TAG_COUNT else "gray"
-        self.tags_count_label.setText(text)
-        self.tags_count_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+        display = presentation.tag_count_display(self.tags_edit.toPlainText())
+        self.tags_count_label.setText(display.text)
+        self.tags_count_label.setStyleSheet(f"color: {display.color}; font-size: 11px;")
 
     def _on_editor_changed(self) -> None:
         """Commit editor contents into the shown item as the user edits, so
@@ -800,12 +784,7 @@ class MainWindow(QMainWindow):
         )
 
     def _update_queue_label(self) -> None:
-        queued = [i for i in self.items if i.convert_status == ConvertStatus.QUEUED]
-        converts = sum(1 for i in queued if i.queue_op is QueueOp.CONVERT)
-        strips = sum(1 for i in queued if i.queue_op is QueueOp.STRIP_AUDIO)
-        self.queue_label.setText(
-            f"{converts} convert, {strips} strip audio" if queued else "Empty"
-        )
+        self.queue_label.setText(presentation.queue_summary(self.items))
 
     def _run_queue(self) -> None:
         if self._queue_running:

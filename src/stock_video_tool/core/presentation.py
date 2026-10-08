@@ -93,13 +93,24 @@ def tag_count_display(text: str) -> TagCount:
     SOURCE: main_window._update_tag_count. Uses openrouter.parse_tags,
     tags_over_limit, TAG_COUNT, TAG_LIMIT.
     """
+    count = len(orc.parse_tags(text))
     over = orc.tags_over_limit(count)
     if over:
-        text = f"{count} / {orc.TAG_COUNT} — remove {over} (max {orc.TAG_LIMIT})"
+        label = f"{count} / {orc.TAG_COUNT} — remove {over} (max {orc.TAG_LIMIT})"
         color = "#c62828"  # red: over the hard limit
     elif count > orc.TAG_COUNT:
-        text = f"{count} / {orc.TAG_COUNT}"
+        label = f"{count} / {orc.TAG_COUNT}"
         color = "#f9a825"  # amber: past the soft target but within the limit
     else:
-        text = f"{count} / {orc.TAG_COUNT}"
+        label = f"{count} / {orc.TAG_COUNT}"
         color = "#2e7d32" if count == orc.TAG_COUNT else "gray"
+    return TagCount(text=label, color=color)
+
+def stats_summary(item: VideoItem) -> str:
+    if item.codec is None:
+        return "Analyzing..."
+    res = f"{item.width}x{item.height}" if item.width else "?"
+    audio = "Has Audio" if item.has_audio else "Silent"
+    dur = f"{item.duration: .1f}s" if item.duration is not None else "?"
+    size = f"{item.size_mb: .1f} MB" if item.size_mb is not None else "?"
+    return f"Codec: {item.codec}   {res}   {dur}   {audio} {size}"
