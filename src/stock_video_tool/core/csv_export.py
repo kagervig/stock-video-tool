@@ -11,6 +11,7 @@ import csv
 from pathlib import Path
 
 from .models import PRICE_MULTI_USE, PRICE_SINGLE_USE, VideoItem
+from . import openrouter as orc
 
 COLUMNS = [
     "Filename",
@@ -64,7 +65,12 @@ def over_limit_report(items: list[VideoItem]) -> list[str]:
     SOURCE: the first loop in main_window._export_csv (the `over` list).
     Uses openrouter.parse_tags / tags_over_limit.
     """
-    raise NotImplementedError
+    over = []
+    for item in items:
+        excess = orc.tags_over_limit(len(orc.parse_tags (item.tags or "")))
+        if excess:
+            over.append(f"  • {item.filename}: remove {excess}")
+    return over
 
 
 def incomplete_report(items: list[VideoItem]) -> list[str]:

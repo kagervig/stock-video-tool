@@ -847,12 +847,7 @@ class MainWindow(QMainWindow):
         if not self.items:
             self.statusBar().showMessage("No videos to export")
             return
-
-        over = []
-        for item in self.items:
-            excess = orc.tags_over_limit(len(orc.parse_tags(item.tags or "")))
-            if excess:
-                over.append(f"  • {item.filename}: remove {excess}")
+        over = csv_export.over_limit_report(self.items)
         if over:
             QMessageBox.warning(
                 self, "Keywords over limit",
