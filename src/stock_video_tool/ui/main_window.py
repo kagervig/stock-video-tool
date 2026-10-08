@@ -857,11 +857,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        incomplete = []
-        for item in self.items:
-            missing = csv_export.missing_fields(item)
-            if missing:
-                incomplete.append(f"  • {item.filename}: missing {', '.join(missing)}")
+        incomplete = csv_export.incomplete_report(self.items)
         if incomplete:
             reply = QMessageBox.question(
                 self, "Missing data",

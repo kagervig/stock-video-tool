@@ -82,7 +82,12 @@ def incomplete_report(items: list[VideoItem]) -> list[str]:
     SOURCE: the second loop in main_window._export_csv (the `incomplete` list).
     Uses missing_fields.
     """
-    raise NotImplementedError
+    incomplete = []
+    for item in items:
+        missing = missing_fields(item)
+        if missing:
+            incomplete.append(f"  • {item.filename}: missing {', '.join(missing)}")
+    return incomplete
 
 
 def build_row(item: VideoItem) -> dict:
