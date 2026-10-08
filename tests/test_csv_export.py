@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+import pytest
+
 from stock_video_tool.core import csv_export
 from stock_video_tool.core.models import VideoItem
 
@@ -93,3 +95,27 @@ def test_write_csv_writes_header_only_for_empty_list(tmp_path):
     with out.open(newline="") as handle:
         rows = list(csv.reader(handle))
     assert rows == [csv_export.COLUMNS]
+
+
+# ---- export blockers (scaffold — implement during refactor) -------------
+
+@pytest.mark.skip(reason="scaffold — implement during refactor")
+def test_over_limit_report_empty_when_all_within_limit():
+    raise NotImplementedError
+
+
+@pytest.mark.skip(reason="scaffold — implement during refactor")
+def test_over_limit_report_lists_clips_over_the_limit():
+    """One "  • <name>: remove N" line per offending clip."""
+    raise NotImplementedError
+
+
+@pytest.mark.skip(reason="scaffold — implement during refactor")
+def test_incomplete_report_empty_when_all_complete():
+    raise NotImplementedError
+
+
+@pytest.mark.skip(reason="scaffold — implement during refactor")
+def test_incomplete_report_lists_missing_fields_per_clip():
+    """One "  • <name>: missing <fields>" line per clip with gaps."""
+    raise NotImplementedError

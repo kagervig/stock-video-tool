@@ -55,6 +55,30 @@ def missing_fields(item: VideoItem) -> list[str]:
     return missing
 
 
+def over_limit_report(items: list[VideoItem]) -> list[str]:
+    """Per-clip lines for clips whose keywords exceed the hard limit.
+
+    One formatted line per offending clip, e.g. "  • clip.mp4: remove 3".
+    Empty list when every clip is within the limit (the export can proceed).
+
+    SOURCE: the first loop in main_window._export_csv (the `over` list).
+    Uses openrouter.parse_tags / tags_over_limit.
+    """
+    raise NotImplementedError
+
+
+def incomplete_report(items: list[VideoItem]) -> list[str]:
+    """Per-clip lines for clips still missing pipeline fields.
+
+    One formatted line per clip with gaps, e.g.
+    "  • clip.mp4: missing Title, Keywords". Empty list when all complete.
+
+    SOURCE: the second loop in main_window._export_csv (the `incomplete` list).
+    Uses missing_fields.
+    """
+    raise NotImplementedError
+
+
 def build_row(item: VideoItem) -> dict:
     row = {column: "" for column in COLUMNS}
     row["Filename"] = item.export_filename

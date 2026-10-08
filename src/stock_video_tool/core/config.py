@@ -77,6 +77,34 @@ class Settings:
         SETTINGS_PATH.write_text(json.dumps(asdict(self), indent=2))
 
 
+@dataclass
+class SectionResolution:
+    """The outcome of validating a section's model + key before a request.
+
+    Exactly one of (model, key) being set or `error` being set. The UI turns a
+    non-None `error` into a status-bar message and aborts; otherwise it builds
+    an openrouter.Client(key) with the model.
+
+    SOURCE: main_window._client_for (the validation half; Client construction
+    stays in the UI so this module keeps no network dependency).
+    """
+
+    model: str = ""
+    key: str = ""
+    error: str | None = None
+
+
+def resolve_section(settings: "Settings", section: str) -> SectionResolution:
+    """Validate the model + key for one section ("description"/"titles"/"tags").
+
+    Returns a SectionResolution with `error` set to a user-facing message when
+    the model or the chosen key is missing, otherwise with model + key filled.
+
+    SOURCE: main_window._client_for.
+    """
+    raise NotImplementedError
+
+
 def slim_models(models: list[dict]) -> list[dict]:
     """Keep only the fields the dropdowns and filters need, to cache compactly."""
     slim = []

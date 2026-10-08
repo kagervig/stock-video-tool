@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from ..core import csv_export
 from ..core import ffmpeg
+from ..core import presentation
 from ..core import library as lib
 from ..core import openrouter as orc
 from ..core.config import Settings
@@ -43,6 +44,7 @@ from ..core.stats import Stats
 from ..core.models import CATEGORIES, ConvertStatus, QueueOp, Stage, VideoItem
 from ..workers import CallWorker, ProbeWorker, QueueWorker
 from .settings_dialog import SettingsDialog
+from .widgets import DropList, TagsEdit
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".m4v", ".avi"}
 
@@ -270,8 +272,6 @@ class MainWindow(QMainWindow):
         added = 0
         for p in paths:
             path = Path(p)
-            if path.suffix.lower() not in VIDEO_SUFFIXES:
-                continue
             item = VideoItem(path=path)
             stored = self.library.lookup(item.filename)
             if stored:
@@ -291,7 +291,7 @@ class MainWindow(QMainWindow):
         self.list.blockSignals(True)
         self.list.clear()
         for item in self.items:
-            QListWidgetItem(self._row_label(item), self.list)
+            QListWidgetItem(presentation._row_label(item), self.list)
         self.list.blockSignals(False)
         if keep in self.items:
             self.list.setCurrentRow(self.items.index(keep))
@@ -333,35 +333,8 @@ class MainWindow(QMainWindow):
         self.list.item(idx).setText(f"{item.filename}  [probe failed]")
         self.statusBar().showMessage(f"{item.filename}: {message}")
 
-    def _row_label(self, item: VideoItem) -> str:
-        if item.codec is None:
-            return f"{item.filename}  [analyzing…]"
-        marks = []
-        if item.description:
-            marks.append("D")
-        if item.title:
-            marks.append("T")
-        if item.tags:
-            marks.append("K")
-        if item.running:
-            marks.append("⋯ " + "/".join(sorted(item.running)))
-        if item.is_h265:
-            marks.append("H265")
-        elif item.has_audio:
-            marks.append("audio")
-        if item.convert_status == ConvertStatus.QUEUED:
-            marks.append("⏳")
-        elif item.convert_status == ConvertStatus.CONVERTING:
-            marks.append("⚙ processing")
-        elif item.convert_status == ConvertStatus.DONE:
-            marks.append("✓")
-        elif item.convert_status == ConvertStatus.FAILED:
-            marks.append("✗ failed")
-        suffix = f"  [{' '.join(marks)}]" if marks else ""
-        return f"{item.filename}{suffix}"
-
     def _refresh_row(self, idx: int) -> None:
-        self.list.item(idx).setText(self._row_label(self.items[idx]))
+        self.list.item(idx).setText(presentation._row_label(self.items[idx]))
 
     def _current(self) -> VideoItem | None:
         idx = self.list.currentRow()
@@ -940,47 +913,3 @@ class MainWindow(QMainWindow):
             f"Wrote {len(self.items)} row(s) to:\n{out}",
         )
         self.statusBar().showMessage(f"Exported CSV → {out}")
-
-
-class TagsEdit(QPlainTextEdit):
-    """Keyword editor that signals when editing finishes (for limit checks)."""
-
-    editingFinished = Signal()
-
-    def focusOutEvent(self, event) -> None:
-        super().focusOutEvent(event)
-        self.editingFinished.emit()
-
-
-class DropList(QListWidget):
-    """List widget that accepts dropped video files."""
-
-    def __init__(self, on_drop) -> None:
-        super().__init__()
-        self._on_drop = on_drop
-        self.setAcceptDrops(True)
-
-    def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-
-    def dragMoveEvent(self, event) -> None:
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-
-    def dropEvent(self, event) -> None:
-        paths = [u.toLocalFile() for u in event.mimeData().urls()]
-        self._on_drop(paths)
-        event.acceptProposedAction()
-
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        if self.count() == 0:
-            painter = QPainter(self.viewport())
-            painter.setPen(QColor("#888"))
-            painter.drawText(
-                self.viewport().rect(),
-                Qt.AlignmentFlag.AlignCenter,
-                "Drag and drop files here",
-            )
-            painter.end()

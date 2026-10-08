@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from stock_video_tool.core import config
 
 _FULL_MODEL = {
@@ -42,3 +44,22 @@ def test_cache_round_trips(tmp_path):
 
 def test_load_cached_models_returns_empty_when_missing(tmp_path):
     assert config.load_cached_models(path=tmp_path / "nope.json") == []
+
+
+# ---- resolve_section (scaffold — implement during refactor) --------------
+
+@pytest.mark.skip(reason="scaffold — implement during refactor")
+def test_resolve_section_errors_when_model_missing():
+    """Empty model -> error mentioning the section, no model/key."""
+    raise NotImplementedError
+
+
+@pytest.mark.skip(reason="scaffold — implement during refactor")
+def test_resolve_section_errors_when_key_missing():
+    """Model set but chosen key blank -> error naming the key choice."""
+    raise NotImplementedError
+
+
+@pytest.mark.skip(reason="scaffold — implement during refactor")
+def test_resolve_section_returns_model_and_key_when_valid():
+    raise NotImplementedError
