@@ -169,6 +169,12 @@ class MainWindow(QMainWindow):
         header_row = QHBoxLayout()
         header_row.addWidget(QLabel("Videos"))
         header_row.addStretch(1)
+        self.queue_selected_btn = QPushButton("Queue selected")
+        self.queue_selected_btn.setToolTip(
+            "Add every selected clip that needs processing to the convert queue"
+        )
+        self.queue_selected_btn.clicked.connect(self._queue_selected)
+        header_row.addWidget(self.queue_selected_btn)
         self.clear_files_btn = QPushButton("Clear files")
         self.clear_files_btn.clicked.connect(self._clear_files)
         header_row.addWidget(self.clear_files_btn)
@@ -852,6 +858,31 @@ class MainWindow(QMainWindow):
         self._refresh_row(self.list.currentRow())
         self._show_detail(item)
         self._update_queue_label()
+
+    def _queue_selected(self) -> None:
+        """Queue every selected clip that needs processing, in one click."""
+        rows = sorted(i.row() for i in self.list.selectedIndexes())
+        if not rows:
+            self.statusBar().showMessage("Select one or more videos to queue")
+            return
+        queued = 0
+        for row in rows:
+            item = self.items[row]
+            if item.planned_op is QueueOp.NONE:
+                continue  # not H265 and no audio — nothing to process
+            if item.convert_status == ConvertStatus.QUEUED:
+                continue  # already in the queue
+            item.queue_op = item.planned_op
+            item.convert_status = ConvertStatus.QUEUED
+            self._refresh_row(row)
+            queued += 1
+        self._update_queue_label()
+        if self._current():
+            self._show_detail(self._current())
+        self.statusBar().showMessage(
+            f"Queued {queued} video(s) for processing" if queued
+            else "Nothing to queue — selected clips need no processing"
+        )
 
     def _clear_files(self) -> None:
         if self._inflight > 0 or self._queue_running:

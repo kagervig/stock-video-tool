@@ -110,3 +110,39 @@ def test_title_with_forbidden_chars_is_not_flagged_in_envato_mode(qapp):
     window.title_combo.setCurrentText("Rock & Roll")
 
     assert window.title_combo.styleSheet() == ""
+
+
+def test_queue_selected_queues_every_selected_processable_clip(qapp):
+    """Selecting multiple clips and clicking once queues all that need work."""
+    from stock_video_tool.core.models import ConvertStatus, VideoItem
+    from stock_video_tool.ui.main_window import MainWindow
+
+    window = MainWindow()
+    a = VideoItem(path=Path("/v/a.mp4"))
+    a.has_audio = True  # -> planned_op STRIP_AUDIO
+    b = VideoItem(path=Path("/v/b.mp4"))
+    b.has_audio = True
+    window.items = [a, b]
+    window._rebuild_list()
+    window.list.selectAll()
+
+    window._queue_selected()
+
+    assert [a.convert_status, b.convert_status] == [
+        ConvertStatus.QUEUED, ConvertStatus.QUEUED,
+    ]
+
+
+def test_queue_selected_skips_clips_that_need_no_processing(qapp):
+    from stock_video_tool.core.models import ConvertStatus, VideoItem
+    from stock_video_tool.ui.main_window import MainWindow
+
+    window = MainWindow()
+    clean = VideoItem(path=Path("/v/clean.mp4"))  # no audio, not H265 -> no op
+    window.items = [clean]
+    window._rebuild_list()
+    window.list.selectAll()
+
+    window._queue_selected()
+
+    assert clean.convert_status == ConvertStatus.NONE
