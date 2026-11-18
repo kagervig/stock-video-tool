@@ -238,6 +238,20 @@ class SettingsDialog(QDialog):
         export_layout.addWidget(browse)
         layout.addWidget(export_box)
 
+        filter_box = QGroupBox("Keyword filtering")
+        filter_layout = QVBoxLayout(filter_box)
+        filter_hint = QLabel(
+            "One keyword per line. These are removed from the AI's keyword "
+            "response (exact, case-insensitive), e.g. 4K, UHD, Stock Footage."
+        )
+        filter_hint.setStyleSheet("color: gray; font-size: 11px;")
+        filter_hint.setWordWrap(True)
+        self.excluded_edit = QPlainTextEdit("\n".join(settings.excluded_keywords))
+        self.excluded_edit.setFixedHeight(90)
+        filter_layout.addWidget(filter_hint)
+        filter_layout.addWidget(self.excluded_edit)
+        layout.addWidget(filter_box)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
@@ -297,6 +311,11 @@ class SettingsDialog(QDialog):
         for box in self.sections:
             box.apply_to()
         self.settings.export_path = self.export_edit.text()
+        self.settings.excluded_keywords = [
+            line.strip()
+            for line in self.excluded_edit.toPlainText().splitlines()
+            if line.strip()
+        ]
         self.settings.save()
         self.accept()
 

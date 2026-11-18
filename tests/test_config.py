@@ -46,6 +46,36 @@ def test_load_cached_models_returns_empty_when_missing(tmp_path):
     assert config.load_cached_models(path=tmp_path / "nope.json") == []
 
 
+# ---- marketplace setting -------------------------------------------------
+
+def test_settings_default_marketplace_is_envato():
+    assert config.Settings().marketplace == "Envato"
+
+
+def test_marketplace_round_trips_through_save_and_load(tmp_path, monkeypatch):
+    path = tmp_path / "settings.json"
+    monkeypatch.setattr(config, "APP_SUPPORT_DIR", tmp_path)
+    monkeypatch.setattr(config, "SETTINGS_PATH", path)
+    settings = config.Settings()
+    settings.marketplace = "Shutterstock"
+    settings.save()
+    assert config.Settings.load().marketplace == "Shutterstock"
+
+
+def test_settings_default_excluded_keywords_is_empty():
+    assert config.Settings().excluded_keywords == []
+
+
+def test_excluded_keywords_round_trip_through_save_and_load(tmp_path, monkeypatch):
+    path = tmp_path / "settings.json"
+    monkeypatch.setattr(config, "APP_SUPPORT_DIR", tmp_path)
+    monkeypatch.setattr(config, "SETTINGS_PATH", path)
+    settings = config.Settings()
+    settings.excluded_keywords = ["4K", "UHD", "Stock Footage"]
+    settings.save()
+    assert config.Settings.load().excluded_keywords == ["4K", "UHD", "Stock Footage"]
+
+
 # ---- resolve_section (scaffold — implement during refactor) --------------
 
 @pytest.mark.skip(reason="scaffold — implement during refactor")

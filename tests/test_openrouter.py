@@ -101,6 +101,24 @@ def test_parse_tags_strips_a_code_fence():
     assert orc.parse_tags("```\nsunset, ocean\n```") == ["sunset", "ocean"]
 
 
+# --- filter_tags ----------------------------------------------------------
+
+def test_filter_tags_removes_exact_matches_case_insensitively():
+    assert orc.filter_tags(["sunset", "4K", "uhd"], ["4k", "UHD"]) == ["sunset"]
+
+
+def test_filter_tags_preserves_order_of_kept_keywords():
+    assert orc.filter_tags(["a", "4K", "b", "c"], ["4K"]) == ["a", "b", "c"]
+
+
+def test_filter_tags_keeps_keywords_that_only_contain_a_blocked_word():
+    assert orc.filter_tags(["4K drone shot"], ["4K"]) == ["4K drone shot"]
+
+
+def test_filter_tags_is_a_noop_with_an_empty_blocklist():
+    assert orc.filter_tags(["sunset", "4K"], []) == ["sunset", "4K"]
+
+
 # --- parse_category -------------------------------------------------------
 
 def test_parse_category_exact_match():

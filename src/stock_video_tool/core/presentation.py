@@ -9,6 +9,7 @@ etc.) becomes an isolated, assertable case.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +40,36 @@ def is_video(path: Path) -> bool:
     main_window._add_paths.
     """
     return path.suffix.lower() in VIDEO_SUFFIXES
+
+def split_new_paths(
+    paths: list[str], existing_names: set[str]
+) -> tuple[list[Path], list[Path]]:
+    """Partition dropped paths into (new, duplicate) video files by filename.
+
+    A video path is a duplicate when its filename already belongs to a loaded
+    clip (existing_names) or to an earlier path in the same batch. Non-video
+    paths are dropped from both lists.
+    """
+    seen = set(existing_names)
+    new: list[Path] = []
+    duplicates: list[Path] = []
+    for raw in paths:
+        path = Path(raw)
+        if not is_video(path):
+            continue
+        if path.name in seen:
+            duplicates.append(path)
+        else:
+            seen.add(path.name)
+            new.append(path)
+    return new, duplicates
+
+
+def duplicate_filenames(items: list[VideoItem]) -> set[str]:
+    """Filenames shared by more than one loaded clip (for the red highlight)."""
+    counts = Counter(item.filename for item in items)
+    return {name for name, total in counts.items() if total > 1}
+
 
 def _row_label(item: VideoItem) -> str:
         if item.codec is None:

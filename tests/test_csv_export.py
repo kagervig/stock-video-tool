@@ -97,6 +97,84 @@ def test_write_csv_writes_header_only_for_empty_list(tmp_path):
     assert rows == [csv_export.COLUMNS]
 
 
+# ---- Shutterstock format -------------------------------------------------
+
+def test_shutterstock_columns_match_the_template_header_in_order():
+    assert csv_export.SHUTTERSTOCK_COLUMNS == [
+        "Filename", "Description", "Keywords", "Categories",
+        "Editorial", "Mature content", "illustration",
+    ]
+
+
+def test_shutterstock_row_puts_the_title_in_the_description_column():
+    # Shutterstock has no Title column; its Description field is the headline,
+    # so the pipeline Title goes there.
+    assert csv_export.build_shutterstock_row(_item())["Description"] == "Forest Stream 4K"
+
+
+def test_shutterstock_row_maps_keywords_into_the_keywords_column():
+    assert csv_export.build_shutterstock_row(_item())["Keywords"] == "forest, stream, water"
+
+
+def test_shutterstock_row_description_column_falls_back_to_description_when_no_title():
+    item = _item()
+    item.title = None
+    assert csv_export.build_shutterstock_row(item)["Description"] == "A calm forest stream."
+
+
+def test_shutterstock_row_uses_original_filename_even_when_processed():
+    item = _item()
+    item.output_path = Path("/videos/converted/clip.mov")
+    # Shutterstock accepts H265, so the original is uploaded, not the re-encode.
+    assert csv_export.build_shutterstock_row(item)["Filename"] == "clip.mp4"
+
+
+def test_shutterstock_row_maps_envato_category_to_shutterstock():
+    item = _item()
+    item.category = "Vehicles"
+    assert csv_export.build_shutterstock_row(item)["Categories"] == "Transportation"
+
+
+def test_shutterstock_row_leaves_category_blank_when_unmapped():
+    item = _item()
+    item.category = "Time Lapse"  # capture technique, no Shutterstock equivalent
+    assert csv_export.build_shutterstock_row(item)["Categories"] == ""
+
+
+def test_shutterstock_row_defaults_flag_columns_to_no():
+    row = csv_export.build_shutterstock_row(_item())
+    assert [row["Editorial"], row["Mature content"], row["illustration"]] == [
+        "no", "no", "no",
+    ]
+
+
+def test_write_csv_uses_shutterstock_columns_when_given_that_format(tmp_path):
+    out = tmp_path / "shutterstock.csv"
+    csv_export.write_csv([_item()], out, csv_export.SHUTTERSTOCK)
+    with out.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["Categories"] == "Nature"
+
+
+def test_shutterstock_categories_are_the_distinct_map_targets_sorted():
+    assert csv_export.SHUTTERSTOCK_CATEGORIES == sorted(
+        set(csv_export.ENVATO_TO_SHUTTERSTOCK_CATEGORY.values())
+    )
+
+
+def test_every_shutterstock_category_maps_back_to_envato():
+    for category in csv_export.SHUTTERSTOCK_CATEGORIES:
+        assert category in csv_export.ENVATO_TO_SHUTTERSTOCK_CATEGORY.values()
+
+
+def test_forbidden_shutterstock_chars_empty_for_clean_text():
+    assert csv_export.forbidden_shutterstock_chars("Forest Stream 4K") == []
+
+
+def test_forbidden_shutterstock_chars_lists_present_chars_in_rule_order():
+    assert csv_export.forbidden_shutterstock_chars("A & B > C / D") == [">", "/", "&"]
+
+
 # ---- export blockers (scaffold — implement during refactor) -------------
 
 @pytest.mark.skip(reason="scaffold — implement during refactor")

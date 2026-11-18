@@ -9,6 +9,7 @@ no filesystem needed except where a real file size matters.
 from __future__ import annotations
 from pathlib import Path
 from stock_video_tool.core import presentation
+from stock_video_tool.core.models import VideoItem
 
 import pytest
 
@@ -28,6 +29,38 @@ def test_is_video_is_case_insensitive():
 
 def is_video(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_SUFFIXES
+
+
+# ---- split_new_paths ----------------------------------------------------
+
+def test_split_new_paths_drops_non_video_files():
+    new, duplicates = presentation.split_new_paths(["/v/clip.mp4", "/v/notes.txt"], set())
+    assert ([p.name for p in new], duplicates) == (["clip.mp4"], [])
+
+
+def test_split_new_paths_flags_paths_matching_an_existing_filename():
+    new, duplicates = presentation.split_new_paths(["/b/clip.mp4"], {"clip.mp4"})
+    assert ([p.name for p in new], [p.name for p in duplicates]) == ([], ["clip.mp4"])
+
+
+def test_split_new_paths_flags_repeats_within_the_same_batch():
+    new, duplicates = presentation.split_new_paths(["/a/clip.mp4", "/b/clip.mp4"], set())
+    assert ([p.name for p in new], [p.name for p in duplicates]) == (
+        ["clip.mp4"], ["clip.mp4"],
+    )
+
+
+# ---- duplicate_filenames ------------------------------------------------
+
+def test_duplicate_filenames_empty_when_all_unique():
+    items = [VideoItem(path=Path("/a/one.mp4")), VideoItem(path=Path("/b/two.mp4"))]
+    assert presentation.duplicate_filenames(items) == set()
+
+
+def test_duplicate_filenames_lists_names_shared_by_more_than_one_clip():
+    items = [VideoItem(path=Path("/a/clip.mp4")), VideoItem(path=Path("/b/clip.mp4"))]
+    assert presentation.duplicate_filenames(items) == {"clip.mp4"}
+
 
 # ---- row_label ----------------------------------------------------------
 

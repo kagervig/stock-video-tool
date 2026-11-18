@@ -58,6 +58,9 @@ class Settings:
     titles: SectionConfig = field(default_factory=SectionConfig)
     tags: SectionConfig = field(default_factory=SectionConfig)
     export_path: str = str(Path.home() / "Desktop")
+    marketplace: str = "Envato"  # active marketplace: "Envato" or "Shutterstock"
+    # Keywords stripped from the model's keyword response before they are stored.
+    excluded_keywords: list[str] = field(default_factory=list)
 
     @classmethod
     def load(cls) -> "Settings":
@@ -70,6 +73,8 @@ class Settings:
             titles=_build(SectionConfig, data.get("titles", {})),
             tags=_build(SectionConfig, data.get("tags", {})),
             export_path=data.get("export_path", str(Path.home() / "Desktop")),
+            marketplace=data.get("marketplace", "Envato"),
+            excluded_keywords=list(data.get("excluded_keywords", [])),
         )
 
     def save(self) -> None:
@@ -102,7 +107,16 @@ def resolve_section(settings: "Settings", section: str) -> SectionResolution:
 
     SOURCE: main_window._client_for.
     """
-    raise NotImplementedError
+    cfg = getattr(settings, section)
+    model = cfg.model.strip()
+    if not model:
+        return SectionResolution(error=f"Set a model for '{section}' in Settings")
+    key = settings.keys.get(cfg.key_choice)
+    if not key:
+        return SectionResolution(
+            error=f"Set the {cfg.key_choice} key in Settings (used by '{section}')"
+        )
+    return SectionResolution(model=model, key=key)
 
 
 def slim_models(models: list[dict]) -> list[dict]:

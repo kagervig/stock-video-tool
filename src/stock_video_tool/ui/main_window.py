@@ -11,10 +11,11 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThreadPool, Signal
-from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtGui import QBrush, QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QFileDialog,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -34,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core import csv_export
+from ..core import csv_import
 from ..core import ffmpeg
 from ..core import presentation
 from ..core import library as lib
@@ -43,6 +45,7 @@ from ..core.library import Library
 from ..core.stats import Stats
 from ..core.models import CATEGORIES, ConvertStatus, QueueOp, Stage, VideoItem
 from ..workers import CallWorker, ProbeWorker, QueueWorker
+from .import_dialog import ReverseMappingDialog
 from .settings_dialog import SettingsDialog
 from .widgets import DropList, TagsEdit
 
@@ -60,6 +63,11 @@ class MainWindow(QMainWindow):
         self.resize(1100, 720)
 
         self.settings = Settings.load()
+        self.marketplace = (
+            self.settings.marketplace
+            if self.settings.marketplace in csv_export.FORMATS
+            else "Envato"
+        )
         self.library = Library()
         self.stats = Stats()
         self.items: list[VideoItem] = []
@@ -72,6 +80,8 @@ class MainWindow(QMainWindow):
         self._queue_running = False
         self._queue_worker: QueueWorker | None = None
         self._rate_buttons: dict[str, tuple[QPushButton, QPushButton]] = {}
+        # Filenames shared by more than one loaded clip, shown in red in the list.
+        self._duplicate_names: set[str] = set()
 
         self._build_toolbar()
 
@@ -118,7 +128,16 @@ class MainWindow(QMainWindow):
         action("Copy metadata", self._copy_meta)
         action("Paste to selected", self._paste_meta)
         tb.addSeparator()
+        tb.addWidget(QLabel("Marketplace:"))
+        self.marketplace_combo = QComboBox()
+        self.marketplace_combo.addItems(csv_export.FORMATS)
+        self.marketplace_combo.setCurrentText(self.marketplace)
+        self.marketplace_combo.currentTextChanged.connect(self._on_marketplace_changed)
+        tb.addWidget(self.marketplace_combo)
+        tb.addSeparator()
         action("Export CSV", self._export_csv)
+        action("Import CSV", self._import_csv)
+        action("Convert CSV", self._convert_csv)
 
         spacer = QWidget()
         spacer.setSizePolicy(
@@ -221,6 +240,7 @@ class MainWindow(QMainWindow):
         self.title_combo = QComboBox()
         self.title_combo.setEditable(True)
         self.title_combo.currentTextChanged.connect(self._on_editor_changed)
+        self.title_combo.currentTextChanged.connect(self._validate_title)
         self.more_titles_btn = QPushButton("More")
         self.more_titles_btn.clicked.connect(self._gen_titles)
         title_row.addWidget(QLabel("Title"))
@@ -251,11 +271,11 @@ class MainWindow(QMainWindow):
         self._update_tag_count()
 
         cat_row = QHBoxLayout()
+        self.category_label = QLabel()
         self.category_combo = QComboBox()
-        self.category_combo.addItem("")
-        self.category_combo.addItems(CATEGORIES)
         self.category_combo.currentTextChanged.connect(self._on_editor_changed)
-        cat_row.addWidget(QLabel("Category (Envato)"))
+        self._populate_category_combo()
+        cat_row.addWidget(self.category_label)
         cat_row.addWidget(self.category_combo, 1)
         layout.addLayout(cat_row)
 
@@ -266,15 +286,72 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return panel
 
+    # ---- marketplace / category translation ------------------------------
+
+    def _populate_category_combo(self) -> None:
+        """Load the active marketplace's category list into the dropdown."""
+        categories = (
+            CATEGORIES if self.marketplace == "Envato"
+            else csv_export.SHUTTERSTOCK_CATEGORIES
+        )
+        self.category_label.setText(f"Category ({self.marketplace})")
+        self.category_combo.blockSignals(True)
+        self.category_combo.clear()
+        self.category_combo.addItem("")
+        self.category_combo.addItems(categories)
+        self.category_combo.blockSignals(False)
+
+    def _category_to_display(self, envato: str | None) -> str:
+        """The dropdown text for a canonical Envato category in the active marketplace."""
+        if self.marketplace == "Envato":
+            return envato or ""
+        return csv_export.ENVATO_TO_SHUTTERSTOCK_CATEGORY.get(envato or "", "")
+
+    def _category_from_combo(self) -> str | None:
+        """The canonical Envato category for the current dropdown selection."""
+        text = self.category_combo.currentText().strip()
+        if self.marketplace == "Envato":
+            return text or None
+        current = self._shown_item.category if self._shown_item else None
+        return csv_import.envato_for_shutterstock_choice(text, current) or None
+
+    def _on_marketplace_changed(self, name: str) -> None:
+        self._flush(self._shown_item)
+        self.marketplace = name
+        self.settings.marketplace = name
+        self.settings.save()
+        self._populate_category_combo()
+        self._show_detail(self._current())
+
+    def _validate_title(self) -> None:
+        """Flag a title that Shutterstock would reject (forbidden characters)."""
+        bad = []
+        if self.marketplace == "Shutterstock":
+            bad = csv_export.forbidden_shutterstock_chars(self.title_combo.currentText())
+        if bad:
+            self.title_combo.setStyleSheet(
+                "QComboBox { border: 1px solid #c62828; color: #c62828; }"
+            )
+            self.title_combo.setToolTip(
+                "Shutterstock does not allow these characters in the title: "
+                + " ".join(bad)
+            )
+        else:
+            self.title_combo.setStyleSheet("")
+            self.title_combo.setToolTip("")
+
     # ---- data flow -------------------------------------------------------
 
     def _add_paths(self, paths: list[str]) -> None:
+        existing = {item.filename for item in self.items}
+        # Non-video files are dropped by split_new_paths.
+        ##TO DO add popup error saying unsupported filetype
+        new_paths, duplicates = presentation.split_new_paths(paths, existing)
+        to_add = new_paths
+        if duplicates and self._confirm_keep_duplicates(duplicates):
+            to_add = new_paths + duplicates
         added = 0
-        for p in paths:
-            path = Path(p)
-            if not presentation.is_video(path):
-                continue
-            ##TO DO add popup error saying unsupported filetype
+        for path in to_add:
             item = VideoItem(path=path)
             stored = self.library.lookup(item.filename)
             if stored:
@@ -285,16 +362,32 @@ class MainWindow(QMainWindow):
         if added:
             self._rebuild_list()
             self.statusBar().showMessage(f"Added {added} video(s) — analyzing…")
+        elif duplicates:
+            self.statusBar().showMessage("No files added")
+
+    def _confirm_keep_duplicates(self, duplicates: list[Path]) -> bool:
+        """Ask whether to keep duplicate-named files; True to add them anyway."""
+        listing = "\n".join(f"  • {path.name}" for path in duplicates)
+        reply = QMessageBox.question(
+            self, "Possible duplicates",
+            "These files look like duplicates:\n\n" + listing
+            + "\n\nConfirm you want to keep them in the queue.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return reply == QMessageBox.StandardButton.Yes
 
     def _rebuild_list(self) -> None:
         """Sort items alphabetically by filename and rebuild the list rows,
         keeping self.items and the list widget index-aligned."""
         keep = self._shown_item
         self.items.sort(key=lambda item: item.filename.lower())
+        self._duplicate_names = presentation.duplicate_filenames(self.items)
         self.list.blockSignals(True)
         self.list.clear()
         for item in self.items:
-            QListWidgetItem(presentation._row_label(item), self.list)
+            row = QListWidgetItem(presentation._row_label(item), self.list)
+            self._apply_row_color(row, item)
         self.list.blockSignals(False)
         if keep in self.items:
             self.list.setCurrentRow(self.items.index(keep))
@@ -337,7 +430,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{item.filename}: {message}")
 
     def _refresh_row(self, idx: int) -> None:
-        self.list.item(idx).setText(presentation._row_label(self.items[idx]))
+        row = self.list.item(idx)
+        row.setText(presentation._row_label(self.items[idx]))
+        self._apply_row_color(row, self.items[idx])
+
+    def _apply_row_color(self, row: QListWidgetItem, item: VideoItem) -> None:
+        """Paint a row red when its filename is shared by more than one clip."""
+        if item.filename in self._duplicate_names:
+            row.setForeground(QColor("#c62828"))
+        else:
+            row.setForeground(QBrush())  # reset to the list's default colour
 
     def _current(self) -> VideoItem | None:
         idx = self.list.currentRow()
@@ -356,7 +458,7 @@ class MainWindow(QMainWindow):
         item.description = self.desc_edit.toPlainText().strip() or None
         item.title = self.title_combo.currentText().strip() or None
         item.tags = self.tags_edit.toPlainText().strip() or None
-        item.category = self.category_combo.currentText().strip() or None
+        item.category = self._category_from_combo()
         fields = lib.item_fields(item)
         if lib.has_data(fields):
             self.library.record(item.filename, fields)
@@ -404,6 +506,7 @@ class MainWindow(QMainWindow):
             self.tags_edit.clear()
             self.category_combo.setCurrentIndex(0)
             self._update_tag_count()
+            self._validate_title()
             self._loading = False
             return
 
@@ -415,10 +518,12 @@ class MainWindow(QMainWindow):
         self.desc_edit.setPlainText(item.description or "")
         self.title_combo.clear()
         self.title_combo.addItems(item.title_candidates)
-        if item.title:
-            self.title_combo.setCurrentText(item.title)
+        # Always set the text, even when empty: clearing an editable combo that
+        # has no items leaves the previous line-edit text in place, which would
+        # otherwise leak the prior clip's title onto an untitled one.
+        self.title_combo.setCurrentText(item.title or "")
         self.tags_edit.setPlainText(item.tags or "")
-        self.category_combo.setCurrentText(item.category or "")
+        self.category_combo.setCurrentText(self._category_to_display(item.category))
 
         queued = item.convert_status == ConvertStatus.QUEUED
         op = item.planned_op
@@ -433,6 +538,7 @@ class MainWindow(QMainWindow):
             self.convert_btn.setText("No processing needed")
 
         self._update_tag_count()
+        self._validate_title()
         self._loading = False
 
     def _rating_buttons(self, query_type: str) -> tuple[QPushButton, QPushButton]:
@@ -523,7 +629,7 @@ class MainWindow(QMainWindow):
         item.description = self.desc_edit.toPlainText().strip() or None
         item.title = self.title_combo.currentText().strip() or None
         item.tags = self.tags_edit.toPlainText().strip() or None
-        item.category = self.category_combo.currentText().strip() or None
+        item.category = self._category_from_combo()
         self._refresh_row(self.items.index(item))
 
     def _check_tag_limit(self) -> None:
@@ -643,10 +749,16 @@ class MainWindow(QMainWindow):
     def _apply_titles(self, item, result) -> None:
         titles, chat = result
         item.title_candidates = titles
+        # Default to the first candidate on the item itself, so a result that
+        # arrives after the user switched clips still lands on its title rather
+        # than only stashing the candidate list.
+        if titles:
+            item.title = titles[0]
         item.stage = Stage.TITLED
         if self._current() is item:
             self.title_combo.clear()
             self.title_combo.addItems(titles)
+            self.title_combo.setCurrentText(item.title or "")
         self._persist(item)
         item.models_used["titles"] = chat.model
         self.stats.record(chat.model, "titles", chat.cost, chat.elapsed)
@@ -681,12 +793,13 @@ class MainWindow(QMainWindow):
 
     def _apply_tags(self, item, result) -> None:
         tags, category, r1, r2 = result
+        tags = orc.filter_tags(tags, self.settings.excluded_keywords)
         item.tags = ", ".join(tags)
         item.category = category
         item.stage = Stage.TAGGED
         if self._current() is item:
             self.tags_edit.setPlainText(item.tags)
-            self.category_combo.setCurrentText(category)
+            self.category_combo.setCurrentText(self._category_to_display(category))
         self._refresh_row(self.items.index(item))
         self._persist(item)
         item.models_used["tags"] = r1.model
@@ -708,7 +821,7 @@ class MainWindow(QMainWindow):
             "title": self.title_combo.currentText(),
             "description": self.desc_edit.toPlainText(),
             "tags": self.tags_edit.toPlainText(),
-            "category": self.category_combo.currentText(),
+            "category": self._category_from_combo() or "",
         }
         self.statusBar().showMessage("Copied title, description, tags, category")
 
@@ -840,6 +953,10 @@ class MainWindow(QMainWindow):
         dlg = SettingsDialog(self.settings, self)
         if dlg.exec():
             self.settings = Settings.load()
+            if self.settings.marketplace in csv_export.FORMATS:
+                self.marketplace = self.settings.marketplace
+                self.marketplace_combo.setCurrentText(self.marketplace)
+                self._populate_category_combo()
             self.statusBar().showMessage("Settings saved")
 
     def _export_csv(self) -> None:
@@ -869,12 +986,13 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 return
 
+        fmt = csv_export.FORMATS[self.marketplace]
         out = (
             Path(self.settings.export_path)
-            / f"stock_video_export_{datetime.now():%Y%m%d_%H%M%S}.csv"
+            / f"{fmt.filename_prefix}_{datetime.now():%Y%m%d_%H%M%S}.csv"
         )
         try:
-            csv_export.write_csv(self.items, out)
+            csv_export.write_csv(self.items, out, fmt)
         except OSError as exc:
             QMessageBox.critical(self, "Export failed", str(exc))
             return
@@ -883,3 +1001,108 @@ class MainWindow(QMainWindow):
             f"Wrote {len(self.items)} row(s) to:\n{out}",
         )
         self.statusBar().showMessage(f"Exported CSV → {out}")
+
+    def _reverse_gaps(self, fmt, rows):
+        """Resolve the fields a Shutterstock CSV can't carry into Envato terms.
+
+        Returns (category_choices, title_policy); an Envato source needs no
+        prompt and gets the defaults. Returns None if the user cancels.
+        """
+        if fmt is not csv_export.SHUTTERSTOCK:
+            return {}, csv_import.TitlePolicy.LEAVE_BLANK
+        ambiguous = csv_import.ambiguous_shutterstock_categories(rows)
+        dlg = ReverseMappingDialog(ambiguous, self)
+        if not dlg.exec():
+            return None
+        return dlg.category_choices(), dlg.title_policy()
+
+    def _convert_csv(self) -> None:
+        src, _ = QFileDialog.getOpenFileName(
+            self, "Choose a CSV to convert", self.settings.export_path,
+            "CSV files (*.csv)",
+        )
+        if not src:
+            return
+        try:
+            fmt, rows = csv_import.read_csv(Path(src))
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Convert failed", str(exc))
+            return
+        if not rows:
+            QMessageBox.warning(self, "Nothing to convert", "The CSV has no rows.")
+            return
+        gaps = self._reverse_gaps(fmt, rows)
+        if gaps is None:
+            return
+        choices, policy = gaps
+        items = csv_import.items_from_rows(
+            rows, fmt, category_choices=choices, title_policy=policy,
+        )
+        target = csv_export.SHUTTERSTOCK if fmt is csv_export.ENVATO else csv_export.ENVATO
+        out = (
+            Path(self.settings.export_path)
+            / f"{target.filename_prefix}_{datetime.now():%Y%m%d_%H%M%S}.csv"
+        )
+        try:
+            csv_export.write_csv(items, out, target)
+        except OSError as exc:
+            QMessageBox.critical(self, "Convert failed", str(exc))
+            return
+        QMessageBox.information(
+            self, "Convert complete",
+            f"Converted {len(items)} row(s) from {fmt.name} to {target.name}:\n{out}",
+        )
+        self.statusBar().showMessage(f"Converted CSV → {out}")
+
+    def _import_csv(self) -> None:
+        if not self.items:
+            self.statusBar().showMessage("Load clips before importing metadata")
+            return
+        src, _ = QFileDialog.getOpenFileName(
+            self, "Choose a CSV to import", self.settings.export_path,
+            "CSV files (*.csv)",
+        )
+        if not src:
+            return
+        try:
+            fmt, rows = csv_import.read_csv(Path(src))
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Import failed", str(exc))
+            return
+        gaps = self._reverse_gaps(fmt, rows)
+        if gaps is None:
+            return
+        choices, policy = gaps
+
+        by_export = {item.export_filename: item for item in self.items}
+        by_name = {item.filename: item for item in self.items}
+        matched = 0
+        unmatched: list[str] = []
+        for row in rows:
+            meta = csv_import.item_from_row(
+                row, fmt, category_choices=choices, title_policy=policy,
+            )
+            target = by_export.get(meta.filename) or by_name.get(meta.filename)
+            if target is None:
+                unmatched.append(meta.filename)
+                continue
+            # Apply only the fields the CSV provides, so a blank column (e.g. a
+            # Shutterstock file's missing Title) doesn't wipe existing metadata.
+            lib.apply_fields(target, {
+                "description": meta.description or target.description,
+                "title": meta.title or target.title,
+                "title_candidates": target.title_candidates,
+                "tags": meta.tags or target.tags,
+                "category": meta.category or target.category,
+            })
+            self._persist(target)
+            matched += 1
+
+        self._rebuild_list()
+        if self._shown_item in self.items:
+            self._show_detail(self._shown_item)
+        summary = f"Imported metadata into {matched} clip(s)"
+        if unmatched:
+            summary += f"; {len(unmatched)} CSV row(s) had no matching clip"
+        QMessageBox.information(self, "Import complete", summary)
+        self.statusBar().showMessage(summary)

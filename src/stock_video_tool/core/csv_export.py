@@ -1,13 +1,17 @@
-"""Write the Envato stock-video import CSV.
+"""Write a stock-video import CSV in the Envato or Shutterstock format.
 
-One row per clip. Filename is the processed output (converted/stripped) when
-there is one, otherwise the original file. Title, Description, Keywords, and
-Category come from the pipeline; prices are fixed; every other column is blank.
+One row per clip. Envato's Filename is the processed output (converted/stripped)
+when there is one, since Envato needs the re-encoded file; Shutterstock accepts
+H265, so its Filename is always the original. Title, Description, Keywords, and
+Category come from the pipeline. The two formats differ only in their columns
+and how the pipeline fields map onto them; see ENVATO and SHUTTERSTOCK.
 """
 
 from __future__ import annotations
 
 import csv
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from .models import PRICE_MULTI_USE, PRICE_SINGLE_USE, VideoItem
@@ -67,7 +71,7 @@ def over_limit_report(items: list[VideoItem]) -> list[str]:
     """
     over = []
     for item in items:
-        excess = orc.tags_over_limit(len(orc.parse_tags (item.tags or "")))
+        excess = orc.tags_over_limit(len(orc.parse_tags(item.tags or "")))
         if excess:
             over.append(f"  • {item.filename}: remove {excess}")
     return over
@@ -104,11 +108,99 @@ def build_row(item: VideoItem) -> dict:
     return row
 
 
-def write_csv(items: list[VideoItem], path: Path) -> None:
+SHUTTERSTOCK_COLUMNS = [
+    "Filename",
+    "Description",
+    "Keywords",
+    "Categories",
+    "Editorial",
+    "Mature content",
+    "illustration",
+]
+
+# Map each Envato pipeline category onto a Shutterstock category. Envato's
+# capture-technique categories (Overhead, Slow Motion, Stop Motion, Time Lapse)
+# have no Shutterstock subject equivalent and are left out, so they fall through
+# to a blank Categories column.
+ENVATO_TO_SHUTTERSTOCK_CATEGORY = {
+    "Buildings": "Buildings/Landmarks",
+    "City": "Buildings/Landmarks",
+    "Business": "Business/Finance",
+    "Corporate": "Business/Finance",
+    "Construction": "Industrial",
+    "Industrial": "Industrial",
+    "Education": "Education",
+    "Food": "Food and drink",
+    "Holidays": "Holidays",
+    "Special Events": "Holidays",
+    "Kids": "People",
+    "People": "People",
+    "Lifestyle": "People",
+    "Military": "People",
+    "Medical": "Healthcare/Medical",
+    "Nature": "Nature",
+    "Weather": "Nature",
+    "Religious": "Religion",
+    "Sports": "Sports/Recreation",
+    "Technology": "Technology",
+    "Vehicles": "Transportation",
+    "Science": "Science",
+    "Cartoons": "Arts",
+}
+
+# The marketplace's own category list for the detail-panel dropdown. Derived
+# from the map's targets so it stays in lockstep with the translation above;
+# every entry therefore has a reverse mapping back to Envato.
+SHUTTERSTOCK_CATEGORIES = sorted(set(ENVATO_TO_SHUTTERSTOCK_CATEGORY.values()))
+
+# Characters Shutterstock rejects in text fields (e.g. the title).
+SHUTTERSTOCK_FORBIDDEN_CHARS = ("<", ">", "/", "&")
+
+
+def forbidden_shutterstock_chars(text: str) -> list[str]:
+    """Which Shutterstock-forbidden characters appear in text, in rule order."""
+    return [char for char in SHUTTERSTOCK_FORBIDDEN_CHARS if char in (text or "")]
+
+
+def build_shutterstock_row(item: VideoItem) -> dict:
+    row = {column: "" for column in SHUTTERSTOCK_COLUMNS}
+    # Shutterstock accepts H265, so the original file is uploaded as-is — unlike
+    # Envato, it never points at the re-encoded "converted" output.
+    row["Filename"] = item.filename
+    # Shutterstock has no Title column — its Description field is the headline, so
+    # the pipeline Title goes there, falling back to the description if unset.
+    row["Description"] = item.title or item.description or ""
+    row["Keywords"] = item.tags or ""
+    row["Categories"] = ENVATO_TO_SHUTTERSTOCK_CATEGORY.get(item.category or "", "")
+    row["Editorial"] = "no"
+    row["Mature content"] = "no"
+    row["illustration"] = "no"
+    return row
+
+
+@dataclass(frozen=True)
+class ExportFormat:
+    """A marketplace CSV layout: its columns and how a clip maps onto a row."""
+
+    name: str
+    columns: list[str]
+    build_row: Callable[[VideoItem], dict]
+    filename_prefix: str
+
+
+ENVATO = ExportFormat("Envato", COLUMNS, build_row, "envato_export")
+SHUTTERSTOCK = ExportFormat(
+    "Shutterstock", SHUTTERSTOCK_COLUMNS, build_shutterstock_row, "shutterstock_export"
+)
+
+FORMATS = {fmt.name: fmt for fmt in (ENVATO, SHUTTERSTOCK)}
+
+
+def write_csv(items: list[VideoItem], path: Path, fmt: ExportFormat = ENVATO) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=COLUMNS)
+        writer = csv.DictWriter(handle, fieldnames=fmt.columns)
         writer.writeheader()
         for item in items:
-            writer.writerow(build_row(item))
+            writer.writerow(fmt.build_row(item))

@@ -154,6 +154,16 @@ def tags_over_limit(count: int) -> int:
     return max(0, count - TAG_LIMIT)
 
 
+def filter_tags(tags: list[str], blocklist: list[str]) -> list[str]:
+    """Drop keywords that exactly match a blocklist entry (case-insensitive).
+
+    Matching is on the whole keyword, so blocking "4K" removes a standalone
+    "4K" tag but keeps "4K drone shot". Order of the kept keywords is preserved.
+    """
+    banned = {entry.strip().lower() for entry in blocklist if entry.strip()}
+    return [tag for tag in tags if tag.strip().lower() not in banned]
+
+
 def parse_category(text: str, categories: list[str]) -> str:
     """Match the model's answer to one of the allowed categories."""
     answer = text.strip().strip('".').lower()
